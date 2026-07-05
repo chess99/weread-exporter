@@ -154,7 +154,20 @@ class WeReadExporter:
                 metadata = type(metadata)(title=metadata.title, author=metadata.author, catalog=catalog)
             manifest = Manifest.new(target.book_id, target.reader_url, metadata.title, metadata.author, metadata.catalog)
             store.save_manifest(manifest)
-            await navigator.goto_first_catalog_item()
+            manifest.catalog_reachability = await navigator.probe_catalog_reachability(metadata.catalog)
+            start_title = await navigator.goto_first_catalog_item(metadata.catalog)
+            if not start_title:
+                manifest.status = "failed"
+                manifest.error = "failed to navigate to any catalog item"
+                store.save_manifest(manifest)
+                return manifest
+            if start_title in metadata.catalog:
+                manifest.skipped_catalog = [
+                    title
+                    for title in metadata.catalog[: metadata.catalog.index(start_title)]
+                    if manifest.catalog_reachability.get(title) != title
+                ]
+                store.save_manifest(manifest)
             return await self._capture_pages(store, navigator, manifest, max_pages=max_pages)
 
     async def resume(self, book_id: str, *, max_pages: int | None = None) -> Manifest:
@@ -235,4 +248,13 @@ class WeReadExporter:
         return manifest
 
     def _write_chapters_and_book(self, store: CheckpointStore, manifest: Manifest) -> Path:
+        page_titles = {str(page.get("chapterTitle") or "") for page in store.list_pages()}
+        skipped = set(manifest.skipped_catalog)
+        for title in manifest.catalog:
+            if title in page_titles:
+                continue
+            if manifest.catalog_reachability.get(title) != title:
+                skipped.add(title)
+        manifest.skipped_catalog = [title for title in manifest.catalog if title in skipped]
+        store.save_manifest(manifest)
         return Finalizer(store).write_complete_book(manifest)

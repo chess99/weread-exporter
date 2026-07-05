@@ -28,6 +28,8 @@ class Manifest:
     updated_at: str
     block_reason: str | None = None
     error: str | None = None
+    skipped_catalog: list[str] = field(default_factory=list)
+    catalog_reachability: dict[str, str | None] = field(default_factory=dict)
 
     @classmethod
     def new(cls, book_id: str, reader_url: str, title: str, author: str, catalog: list[str]) -> "Manifest":
@@ -60,6 +62,8 @@ class Manifest:
             "updated_at": data.get("updated_at", data.get("updatedAt", utc_now())),
             "block_reason": data.get("block_reason", data.get("blockReason")),
             "error": data.get("error"),
+            "skipped_catalog": data.get("skipped_catalog", data.get("skippedCatalog", [])),
+            "catalog_reachability": data.get("catalog_reachability", data.get("catalogReachability", {})),
         }
         return cls(**normalized)
 
@@ -77,6 +81,8 @@ class Manifest:
             "updatedAt": self.updated_at,
             "blockReason": self.block_reason,
             "error": self.error,
+            "skippedCatalog": self.skipped_catalog,
+            "catalogReachability": self.catalog_reachability,
         }
 
 

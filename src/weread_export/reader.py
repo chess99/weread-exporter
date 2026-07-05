@@ -90,18 +90,27 @@ class ReaderNavigator:
         )
         return normalize_title(str(title or "unknown"))
 
-    async def goto_first_catalog_item(self) -> None:
-        try:
-            await self._open_catalog()
-            first = self.page.locator(".readerCatalog_list_item").first
-            await first.click(timeout=5_000)
-            await asyncio.sleep(2)
-            try:
-                await self.page.keyboard.press("Escape")
-            except Exception:
-                pass
-        except Exception:
-            return
+    async def goto_first_catalog_item(self, catalog: list[str] | None = None) -> str | None:
+        titles = catalog or await self.read_catalog()
+        normalized_titles = [normalize_title(title) for title in titles]
+        for index, title in enumerate(normalized_titles):
+            if not await self.goto_catalog_title(title):
+                continue
+            current = await self.current_chapter_title()
+            if current in normalized_titles[index:]:
+                return current
+        return None
+
+    async def probe_catalog_reachability(self, catalog: list[str]) -> dict[str, str | None]:
+        result: dict[str, str | None] = {}
+        for title in catalog:
+            normalized = normalize_title(title)
+            if not await self.goto_catalog_title(normalized):
+                result[normalized] = None
+                continue
+            current = await self.current_chapter_title()
+            result[normalized] = current or None
+        return result
 
     async def goto_catalog_title(self, title: str) -> bool:
         if not title:
@@ -125,7 +134,8 @@ class ReaderNavigator:
         await asyncio.sleep(1)
 
     async def _open_catalog(self) -> None:
-        if await self.page.locator(".readerCatalog_list_item").count() > 0:
+        items = self.page.locator(".readerCatalog_list_item")
+        if await items.count() > 0 and await items.first.is_visible():
             return
         await self.page.click("button.readerControls_item.catalog", timeout=5_000)
         await asyncio.sleep(1)
