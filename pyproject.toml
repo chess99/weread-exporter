@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "weread-canvas-exporter"
+name = "weread-exporter"
 version = "0.1.0"
-description = "Export visible WeRead web reader content through Canvas capture checkpoints."
+description = "Export visible WeRead web reader content through reader checkpoints."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
