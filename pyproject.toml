@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "weread-canvas-exporter"
+version = "0.1.0"
+description = "Export visible WeRead web reader content through Canvas capture checkpoints."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "playwright>=1.40",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+weread-export = "weread_export.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/weread_export"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
