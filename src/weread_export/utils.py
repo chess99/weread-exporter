@@ -37,6 +37,12 @@ def safe_filename(value: str, max_length: int = 80) -> str:
     return name[:max_length]
 
 
+def normalize_title(value: str) -> str:
+    title = value.replace("+书签", "")
+    title = re.sub(r"\s+", " ", title).strip()
+    return title
+
+
 def md5(value: str | bytes) -> str:
     if isinstance(value, str):
         value = value.encode("utf-8")
@@ -60,4 +66,3 @@ def wr_hash(value: str) -> str:
         result += hash_str[: 20 - len(result)]
     result += hashlib.md5(result.encode("utf-8")).hexdigest()[:3]
     return result
-

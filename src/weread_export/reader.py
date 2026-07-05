@@ -6,6 +6,8 @@ from typing import Any
 
 from playwright.async_api import Page
 
+from .utils import normalize_title
+
 
 class LoginRequiredError(RuntimeError):
     pass
@@ -62,7 +64,7 @@ class ReaderNavigator:
 }
 """
         )
-        catalog = list(data.get("catalog") or [])
+        catalog = [normalize_title(item) for item in list(data.get("catalog") or [])]
         if not catalog:
             catalog = [await self.current_chapter_title()]
         return ReaderMetadata(
@@ -71,16 +73,26 @@ class ReaderNavigator:
             catalog=catalog,
         )
 
+    async def read_catalog(self) -> list[str]:
+        await self._open_catalog()
+        titles = await self.page.evaluate(
+            r"""
+() => Array.from(document.querySelectorAll('.readerCatalog_list_item'))
+  .map((item) => item.textContent.trim())
+  .filter(Boolean)
+"""
+        )
+        return [normalize_title(item) for item in list(titles or [])]
+
     async def current_chapter_title(self) -> str:
         title = await self.page.evaluate(
             "() => document.querySelector('.renderTargetPageInfo_header_chapterTitle')?.textContent?.trim() || ''"
         )
-        return str(title or "unknown")
+        return normalize_title(str(title or "unknown"))
 
     async def goto_first_catalog_item(self) -> None:
         try:
-            await self.page.click("button.readerControls_item.catalog", timeout=5_000)
-            await asyncio.sleep(1)
+            await self._open_catalog()
             first = self.page.locator(".readerCatalog_list_item").first
             await first.click(timeout=5_000)
             await asyncio.sleep(2)
@@ -91,7 +103,29 @@ class ReaderNavigator:
         except Exception:
             return
 
+    async def goto_catalog_title(self, title: str) -> bool:
+        if not title:
+            return False
+        try:
+            await self._open_catalog()
+            count = await self.page.locator(".readerCatalog_list_item").count()
+            for index in range(count):
+                item = self.page.locator(".readerCatalog_list_item").nth(index)
+                text = normalize_title((await item.text_content() or "").strip())
+                if text == normalize_title(title):
+                    await item.click(timeout=5_000)
+                    await asyncio.sleep(2)
+                    return True
+            return False
+        except Exception:
+            return False
+
     async def next_page(self) -> None:
         await self.page.keyboard.press("ArrowRight")
         await asyncio.sleep(1)
 
+    async def _open_catalog(self) -> None:
+        if await self.page.locator(".readerCatalog_list_item").count() > 0:
+            return
+        await self.page.click("button.readerControls_item.catalog", timeout=5_000)
+        await asyncio.sleep(1)

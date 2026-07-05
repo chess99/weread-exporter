@@ -1,4 +1,4 @@
-from weread_export.utils import parse_reader_target, safe_filename, wr_hash
+from weread_export.utils import normalize_title, parse_reader_target, safe_filename, wr_hash
 
 
 def test_parse_reader_url_extracts_book_id_and_preserves_url():
@@ -26,3 +26,8 @@ def test_wr_hash_matches_known_weread_chapter_hash_shape():
 
 def test_safe_filename_keeps_chinese_and_removes_windows_invalid_chars():
     assert safe_filename('第八章: 从"逃避"到自主?') == "第八章_ 从_逃避_到自主_"
+
+
+def test_normalize_title_removes_reader_ui_decorations():
+    assert normalize_title("引言 工作教条+书签") == "引言 工作教条"
+    assert normalize_title("  第八章   从逃避到自主  ") == "第八章 从逃避到自主"

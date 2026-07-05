@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -127,6 +127,22 @@ class CheckpointStore:
         index = int(payload.get("pageIndex") or payload.get("page_index") or 0)
         filename = f"{index:06d}.json"
         path = self.pages_dir / filename
+        fingerprint = payload.get("fingerprint")
+        if fingerprint and any(page.get("fingerprint") == fingerprint for page in self.list_pages()):
+            return None
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def append_page(self, payload: dict[str, Any]) -> Path | None:
+        self.ensure_dirs()
+        fingerprint = payload.get("fingerprint")
+        existing = self.list_pages()
+        if fingerprint and any(page.get("fingerprint") == fingerprint for page in existing):
+            return None
+        next_index = len(existing) + 1
+        payload = dict(payload)
+        payload["pageIndex"] = next_index
+        path = self.pages_dir / f"{next_index:06d}.json"
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
@@ -144,4 +160,3 @@ class CheckpointStore:
             chapter_title=manifest.last_completed_chapter,
             page_index=manifest.last_completed_page,
         )
-
