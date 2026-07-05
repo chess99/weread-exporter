@@ -4,6 +4,17 @@
 
 它只采集登录账号本来就能阅读的内容，不绕过登录、购买、会员、试读或平台限制。
 
+## 思路来源
+
+本项目的技术路线参考了 [lbq110/weread-exporter](https://github.com/lbq110/weread-exporter)：通过 Playwright 打开微信读书网页阅读器，捕获页面实际渲染出的文字和图片，再重建为 Markdown。
+
+我们选择重新实现，而不是直接 fork，主要差异是：
+
+- 更重视断点和可恢复性：逐页写入 checkpoint，不靠已生成章节文件猜进度。
+- 更重视结构正确性：记录目录、章节序号、页面指纹和最终可达性，避免重复采集和章节错位。
+- 更明确最终产物：完整导出后生成一本合并 Markdown，同时保留 `pages/` 和 `chapters/` 供检查。
+- 更透明地处理异常：如果某些目录项无法独立到达，会记录在 `manifest.json` 的 `skippedCatalog` 和 `catalogReachability` 中。
+
 ## 安装
 
 ```powershell
@@ -33,7 +44,7 @@ weread-export clean-locks
 
 每本书写入 `output/<book-id>/`：
 
-- `manifest.json`：书籍元数据、目录、状态和断点摘要。
+- `manifest.json`：书籍元数据、目录、状态、断点摘要和目录可达性。
 - `pages/*.json`：逐页采集检查点。
 - `chapters/*.md`：按章节重建出的 Markdown。
 - `<title>.md`：全书合并 Markdown，只在完整导出后生成。
