@@ -15,6 +15,21 @@ class DuplicatePageError(RuntimeError):
     pass
 
 
+async def prepare_current_page_capture(navigator: ReaderNavigator, title: str) -> bool:
+    await reset_canvas_chars(navigator.page)
+    return await navigator.goto_catalog_title(title)
+
+
+def leading_catalog_title(chars: list[object], catalog: list[str]) -> str | None:
+    text = "".join(getattr(char, "text") for char in sorted(chars, key=lambda char: (char.side, char.y, char.x)))
+    compact_text = "".join(text.split())
+    for title in catalog:
+        compact_title = "".join(normalize_title(title).split())
+        if compact_title and compact_text.startswith(compact_title):
+            return normalize_title(title)
+    return None
+
+
 class CapturePolicy:
     def __init__(self, catalog: list[str], *, stale_threshold: int = 3) -> None:
         self.catalog = [normalize_title(item) for item in catalog if item]
@@ -66,36 +81,77 @@ class Finalizer:
     def __init__(self, store: CheckpointStore) -> None:
         self.store = store
 
-    def load_page_captures(self) -> list[tuple[int, str, list[PageCapture]]]:
+    def load_page_captures(self, catalog: list[str] | None = None) -> list[tuple[int, str, list[PageCapture]]]:
         chapters: dict[tuple[int, str], list[PageCapture]] = {}
         order: list[tuple[int, str]] = []
+        normalized_catalog = [normalize_title(title) for title in catalog or []]
+        catalog_positions = {title: index + 1 for index, title in enumerate(normalized_catalog)}
+        active_key: tuple[int, str] | None = None
         for item in self.store.list_pages():
             title = str(item.get("chapterTitle") or "unknown")
             chapter_index = int(item.get("chapterIndex") or len(order) + 1)
-            key = (chapter_index, title)
-            if key not in chapters:
-                chapters[key] = []
-                order.append(key)
             chars = [
                 __import__("weread_export.capture", fromlist=["CanvasChar"]).CanvasChar(**char)
                 for char in item.get("chars", [])
             ]
-            chapters[key].append(
-                PageCapture(
-                    chapter_title=title,
-                    page_index=int(item.get("pageIndex", 0)),
-                    chars=chars,
-                    images=list(item.get("images", [])),
+            images = list(item.get("images", []))
+            page_index = int(item.get("pageIndex", 0))
+            for side_index, side in enumerate(("left", "right")):
+                side_chars = [char for char in chars if char.side == side]
+                side_images = self._images_for_side(images, side)
+                if not side_chars and not side_images:
+                    continue
+                detected_title = self._detect_catalog_title(side_chars, normalized_catalog)
+                if detected_title:
+                    key = (catalog_positions.get(detected_title, chapter_index), detected_title)
+                elif active_key and normalize_title(title) == normalize_title(active_key[1]) and chapter_index > active_key[0]:
+                    key = (chapter_index, title)
+                elif active_key:
+                    key = active_key
+                else:
+                    key = (chapter_index, title)
+                active_key = key
+                if key not in chapters:
+                    chapters[key] = []
+                    order.append(key)
+                chapters[key].append(
+                    PageCapture(
+                        chapter_title=key[1],
+                        page_index=page_index * 2 + side_index,
+                        chars=side_chars,
+                        images=side_images,
+                    )
                 )
-            )
         return [(index, title, chapters[(index, title)]) for index, title in order]
 
-    def write_chapters(self) -> list[Path]:
+    def _detect_catalog_title(self, chars: list[object], catalog: list[str]) -> str | None:
+        text = "".join(getattr(char, "text") for char in sorted(chars, key=lambda char: (char.y, char.x)))
+        compact_text = "".join(text.split())
+        for title in catalog:
+            compact_title = "".join(title.split())
+            if compact_title and compact_text.startswith(compact_title):
+                return title
+        return None
+
+    def _images_for_side(self, images: list[dict], side: str) -> list[dict]:
+        if not images:
+            return []
+        midpoint = 600
+        return [
+            image
+            for image in images
+            if ("left" not in image)
+            or (side == "left" and int(image.get("left", 0)) < midpoint)
+            or (side == "right" and int(image.get("left", 0)) >= midpoint)
+        ]
+
+    def write_chapters(self, manifest: Manifest | None = None) -> list[Path]:
         self.store.ensure_dirs()
         for old_path in self.store.chapters_dir.glob("*.md"):
             old_path.unlink()
         paths: list[Path] = []
-        for sequence, (_chapter_index, title, pages) in enumerate(self.load_page_captures(), start=1):
+        catalog = manifest.catalog if manifest else None
+        for sequence, (_chapter_index, title, pages) in enumerate(self.load_page_captures(catalog), start=1):
             filename = f"{sequence:04d}-{safe_filename(title)}.md"
             path = self.store.chapters_dir / filename
             path.write_text(reconstruct_markdown(title, pages), encoding="utf-8")
@@ -103,7 +159,7 @@ class Finalizer:
         return paths
 
     def write_complete_book(self, manifest: Manifest) -> Path:
-        chapter_paths = self.write_chapters()
+        chapter_paths = self.write_chapters(manifest)
         title = safe_filename(manifest.title)
         book_path = self.store.book_dir / f"{title}.md"
         body = [f"# {manifest.title}", "", f"**{manifest.author}**".strip(), "", "---", ""]
@@ -168,6 +224,11 @@ class WeReadExporter:
                     if manifest.catalog_reachability.get(title) != title
                 ]
                 store.save_manifest(manifest)
+            if not await prepare_current_page_capture(navigator, start_title):
+                manifest.status = "failed"
+                manifest.error = f"failed to prepare capture for catalog item: {start_title}"
+                store.save_manifest(manifest)
+                return manifest
             return await self._capture_pages(store, navigator, manifest, max_pages=max_pages)
 
     async def resume(self, book_id: str, *, max_pages: int | None = None) -> Manifest:
@@ -180,7 +241,7 @@ class WeReadExporter:
             await navigator.ensure_logged_in()
             await navigator.ensure_readable()
             if manifest.last_completed_chapter:
-                await navigator.goto_catalog_title(manifest.last_completed_chapter)
+                await prepare_current_page_capture(navigator, manifest.last_completed_chapter)
             return await self._capture_pages(store, navigator, manifest, max_pages=max_pages)
 
     async def _capture_pages(
@@ -200,11 +261,17 @@ class WeReadExporter:
         captured = 0
 
         while max_pages is None or captured < max_pages:
-            await reset_canvas_chars(navigator.page)
-            await navigator.next_page()
             chars = await read_canvas_chars(navigator.page)
             images = await read_visible_images(navigator.page)
             chapter_title = await navigator.current_chapter_title()
+            detected_title = leading_catalog_title(chars, manifest.catalog)
+            current_position = policy.catalog_positions.get(normalize_title(chapter_title))
+            detected_position = policy.catalog_positions.get(detected_title or "")
+            if detected_position and current_position and detected_position < current_position:
+                if await prepare_current_page_capture(navigator, chapter_title):
+                    chars = await read_canvas_chars(navigator.page)
+                    images = await read_visible_images(navigator.page)
+                    chapter_title = await navigator.current_chapter_title()
             page_index = manifest.last_completed_page + 1
             page_capture = PageCapture(chapter_title=chapter_title, page_index=page_index, chars=chars, images=images)
             fingerprint = page_fingerprint(page_capture)
@@ -215,6 +282,8 @@ class WeReadExporter:
                     store.save_manifest(manifest)
                     self._write_chapters_and_book(store, manifest)
                     return manifest
+                await reset_canvas_chars(navigator.page)
+                await navigator.next_page()
                 continue
 
             if policy.is_backward_or_duplicate_chapter(chapter_title):
@@ -242,9 +311,13 @@ class WeReadExporter:
             manifest.status = "running"
             store.save_manifest(manifest)
             captured += 1
+            if max_pages is not None and captured >= max_pages:
+                break
+            await reset_canvas_chars(navigator.page)
+            await navigator.next_page()
 
         store.save_manifest(manifest)
-        Finalizer(store).write_chapters()
+        Finalizer(store).write_chapters(manifest)
         return manifest
 
     def _write_chapters_and_book(self, store: CheckpointStore, manifest: Manifest) -> Path:
@@ -252,6 +325,7 @@ class WeReadExporter:
         skipped = set(manifest.skipped_catalog)
         for title in manifest.catalog:
             if title in page_titles:
+                manifest.catalog_reachability[title] = title
                 continue
             if manifest.catalog_reachability.get(title) != title:
                 skipped.add(title)

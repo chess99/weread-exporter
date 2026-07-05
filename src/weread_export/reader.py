@@ -116,14 +116,18 @@ class ReaderNavigator:
         if not title:
             return False
         try:
+            normalized_title = normalize_title(title)
             await self._open_catalog()
             count = await self.page.locator(".readerCatalog_list_item").count()
             for index in range(count):
                 item = self.page.locator(".readerCatalog_list_item").nth(index)
                 text = normalize_title((await item.text_content() or "").strip())
-                if text == normalize_title(title):
+                if text == normalized_title:
                     await item.click(timeout=5_000)
-                    await asyncio.sleep(2)
+                    for _ in range(24):
+                        await asyncio.sleep(0.25)
+                        if await self.current_chapter_title() == normalized_title:
+                            break
                     return True
             return False
         except Exception:
