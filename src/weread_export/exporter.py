@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 from .browser import BrowserSession
-from .capture import read_canvas_chars, read_visible_images, reset_canvas_chars
+from .capture import CanvasChar, read_canvas_chars, read_visible_images, reset_canvas_chars
 from .checkpoint import CheckpointStore, Manifest
 from .reader import LoginRequiredError, PermissionBlockedError, ReaderNavigator
 from .reconstruct import PageCapture, page_fingerprint, reconstruct_markdown
@@ -86,10 +86,23 @@ class Finalizer:
         order: list[tuple[int, str]] = []
         normalized_catalog = [normalize_title(title) for title in catalog or []]
         catalog_positions = {title: index + 1 for index, title in enumerate(normalized_catalog)}
+        duplicate_titles = {title for title in normalized_catalog if normalized_catalog.count(title) > 1}
         active_key: tuple[int, str] | None = None
+        seen_draws: set[str] = set()
         for item in self.store.list_pages():
+            # Older checkpoints could classify a canvas before it was laid out.
+            # Its identical drawing may therefore reappear with different sides on resume.
+            draw_key = repr((
+                [(char.get("x"), char.get("y"), char.get("text")) for char in item.get("chars", [])],
+                [image.get("src") for image in item.get("images", [])],
+            ))
+            if draw_key in seen_draws:
+                continue
+            seen_draws.add(draw_key)
             title = str(item.get("chapterTitle") or "unknown")
             chapter_index = int(item.get("chapterIndex") or len(order) + 1)
+            if normalize_title(title) in catalog_positions and normalize_title(title) not in duplicate_titles:
+                chapter_index = catalog_positions[normalize_title(title)]
             chars = [
                 __import__("weread_export.capture", fromlist=["CanvasChar"]).CanvasChar(**char)
                 for char in item.get("chars", [])
@@ -101,37 +114,65 @@ class Finalizer:
                 side_images = self._images_for_side(images, side)
                 if not side_chars and not side_images:
                     continue
-                detected_title = self._detect_catalog_title(side_chars, normalized_catalog)
-                if detected_title:
-                    key = (catalog_positions.get(detected_title, chapter_index), detected_title)
-                elif active_key and normalize_title(title) == normalize_title(active_key[1]) and chapter_index > active_key[0]:
-                    key = (chapter_index, title)
-                elif active_key:
-                    key = active_key
-                else:
-                    key = (chapter_index, title)
-                active_key = key
-                if key not in chapters:
-                    chapters[key] = []
-                    order.append(key)
-                chapters[key].append(
-                    PageCapture(
-                        chapter_title=key[1],
-                        page_index=page_index * 2 + side_index,
-                        chars=side_chars,
-                        images=side_images,
+                segments = self._split_catalog_sections(side_chars, normalized_catalog, active_key[0] if active_key else 0)
+                for segment_index, (detected_title, segment_chars) in enumerate(segments):
+                    if detected_title:
+                        index = chapter_index if detected_title in duplicate_titles else catalog_positions[detected_title]
+                        key = (index, detected_title)
+                    elif active_key and normalize_title(title) == normalize_title(active_key[1]) and chapter_index > active_key[0]:
+                        key = (chapter_index, title)
+                    elif active_key:
+                        key = active_key
+                    else:
+                        key = (chapter_index, title)
+                    active_key = key
+                    if key not in chapters:
+                        chapters[key] = []
+                        order.append(key)
+                    lower = min((char.y for char in segment_chars), default=float('-inf')) if segment_index else float('-inf')
+                    upper = min((char.y for char in segments[segment_index + 1][1]), default=float('inf')) if segment_index + 1 < len(segments) else float('inf')
+                    chapters[key].append(
+                        PageCapture(
+                            chapter_title=key[1],
+                            page_index=page_index * 2 + side_index,
+                            chars=segment_chars,
+                            images=[image for image in side_images if lower <= int(image.get("top", 0)) < upper],
+                        )
                     )
-                )
         return [(index, title, chapters[(index, title)]) for index, title in order]
 
-    def _detect_catalog_title(self, chars: list[object], catalog: list[str]) -> str | None:
-        text = "".join(getattr(char, "text") for char in sorted(chars, key=lambda char: (char.y, char.x)))
-        compact_text = "".join(text.split())
-        for title in catalog:
-            compact_title = "".join(title.split())
-            if compact_title and compact_text.startswith(compact_title):
-                return title
-        return None
+    def _split_catalog_sections(
+        self, chars: list[CanvasChar], catalog: list[str], minimum_index: int = 0
+    ) -> list[tuple[str | None, list[CanvasChar]]]:
+        ordered = sorted(chars, key=lambda char: (round(char.y / 3), char.x))
+        compact_text = "".join("".join(char.text.split()) for char in ordered)
+        positions = {title: index + 1 for index, title in enumerate(catalog)}
+        line_ends: set[int] = set()
+        offset = 0
+        for index, char in enumerate(ordered):
+            offset += len("".join(char.text.split()))
+            if index + 1 == len(ordered) or round(char.y / 3) != round(ordered[index + 1].y / 3):
+                line_ends.add(offset)
+        titles = sorted((("".join(title.split()), title) for title in catalog), reverse=True, key=lambda item: len(item[0]))
+        boundaries: list[tuple[int, str | None]] = [(0, None)]
+        offset = 0
+        for index, char in enumerate(ordered):
+            if index == 0 or round(char.y / 3) != round(ordered[index - 1].y / 3):
+                for compact_title, title in titles:
+                    if (compact_title and positions[title] >= minimum_index
+                            and compact_text.startswith(compact_title, offset)
+                            and (index == 0 or offset + len(compact_title) in line_ends)):
+                        if index == 0:
+                            boundaries[0] = (0, title)
+                        else:
+                            boundaries.append((index, title))
+                        minimum_index = positions[title]
+                        break
+            offset += len("".join(char.text.split()))
+        return [
+            (title, ordered[start:boundaries[index + 1][0] if index + 1 < len(boundaries) else len(ordered)])
+            for index, (start, title) in enumerate(boundaries)
+        ]
 
     def _images_for_side(self, images: list[dict], side: str) -> list[dict]:
         if not images:
@@ -324,7 +365,8 @@ class WeReadExporter:
 
     def _write_chapters_and_book(self, store: CheckpointStore, manifest: Manifest) -> Path:
         page_titles = {str(page.get("chapterTitle") or "") for page in store.list_pages()}
-        skipped = set(manifest.skipped_catalog)
+        page_titles.update(title for _, title, _ in Finalizer(store).load_page_captures(manifest.catalog))
+        skipped = set(manifest.skipped_catalog) - page_titles
         for title in manifest.catalog:
             if title in page_titles:
                 manifest.catalog_reachability[title] = title

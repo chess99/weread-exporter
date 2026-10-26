@@ -13,6 +13,7 @@ CANVAS_HOOK = r"""
       const rect = this.canvas.getBoundingClientRect();
       const side = rect.left < (window.innerWidth / 2) ? "left" : "right";
       window.__wr_chars.push({
+        canvas: this.canvas,
         text: String(text),
         x: Math.round(Number(x) * 10) / 10,
         y: Math.round(Number(y) * 10) / 10,
@@ -72,7 +73,18 @@ class CanvasChar:
 
 
 async def read_canvas_chars(page: Any) -> list[CanvasChar]:
-    raw = await page.evaluate("() => window.__wr_chars || []")
+    raw = await page.evaluate(r"""
+() => (window.__wr_chars || []).flatMap(({canvas, ...item}) => {
+  if (!canvas) return [item];
+  const rect = canvas.getBoundingClientRect();
+  const style = getComputedStyle(canvas);
+  if (!canvas.isConnected || rect.width <= 0 || rect.height <= 0
+      || rect.right <= 0 || rect.left >= innerWidth
+      || rect.bottom <= 0 || rect.top >= innerHeight
+      || style.display === 'none' || style.visibility === 'hidden') return [];
+  return [{...item, side: rect.left < innerWidth / 2 ? 'left' : 'right'}];
+})
+""")
     return [CanvasChar.from_js(item) for item in raw if item.get("text") or item.get("t")]
 
 

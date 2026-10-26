@@ -142,4 +142,4 @@ class ReaderNavigator:
         if await items.count() > 0 and await items.first.is_visible():
             return
         await self.page.click("button.readerControls_item.catalog", timeout=5_000)
-        await asyncio.sleep(1)
+        await items.first.wait_for(state="visible", timeout=10_000)

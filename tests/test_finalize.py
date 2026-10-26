@@ -117,6 +117,7 @@ def test_complete_book_marks_captured_catalog_entries_reachable(tmp_path: Path):
         catalog=["引言"],
     )
     manifest.catalog_reachability = {"引言": None}
+    manifest.skipped_catalog = ["引言"]
     store.save_manifest(manifest)
     store.save_page(_page("引言", 1, "引言正文。", 1))
 
@@ -126,3 +127,62 @@ def test_complete_book_marks_captured_catalog_entries_reachable(tmp_path: Path):
 
     saved = store.load_manifest()
     assert saved.catalog_reachability["引言"] == "引言"
+    assert saved.skipped_catalog == []
+
+
+def test_finalizer_splits_wrapped_chapter_heading_below_part_title(tmp_path: Path):
+    store = CheckpointStore(tmp_path, "book123")
+    manifest = Manifest.new("book123", "url", "书", "作者", ["第一篇 宏观", "第1章 普通人买A股"])
+    payload = _page("第一篇 宏观", 1, "", 1)
+    rows = [(10, "第一篇宏观"), (50, "第1章普通人"), (80, "买A股"), (120, "章节第一句。")]
+    payload["chars"] = [
+        CanvasChar(text=char, x=x * 10, y=y).__dict__
+        for y, text in rows for x, char in enumerate(text)
+    ]
+    store.save_page(payload)
+    store.save_page(_page("第一篇 宏观", 2, "章节第二句。", 1))
+
+    chapters = Finalizer(store).load_page_captures(manifest.catalog)
+
+    assert [title for _, title, _ in chapters] == manifest.catalog
+    chapter_text = "".join(c.text for p in chapters[1][2] for c in p.chars)
+    assert "章节第一句。" in chapter_text
+    assert "章节第二句。" in chapter_text
+
+
+def test_finalizer_ignores_resume_duplicate_with_changed_canvas_side(tmp_path: Path):
+    store = CheckpointStore(tmp_path, "book123")
+    first = _spread("章", 1, "甲。", "乙。", 1)
+    second = _spread("章", 2, "甲。", "乙。", 1)
+    for char in second["chars"]:
+        char["side"] = "left"
+    second["fingerprint"] = "legacy-different-side"
+    store.save_page(first)
+    store.save_page(second)
+
+    chapters = Finalizer(store).load_page_captures(["章"])
+
+    assert "".join(c.text for p in chapters[0][2] for c in p.chars) == "甲。乙。"
+
+
+def test_finalizer_does_not_treat_body_word_as_earlier_catalog_heading(tmp_path: Path):
+    store = CheckpointStore(tmp_path, "book123")
+    store.save_page(_page("第1章", 1, "第1章正文。", 2))
+    store.save_page(_page("第1章", 2, "说明这一现象的原因。", 2))
+
+    chapters = Finalizer(store).load_page_captures(["说明", "第1章"])
+
+    assert [title for _, title, _ in chapters] == ["第1章"]
+
+
+def test_finalizer_requires_inner_heading_to_end_at_a_line_boundary(tmp_path: Path):
+    store = CheckpointStore(tmp_path, "book123")
+    payload = _page("章", 1, "", 1)
+    payload["chars"] = [
+        CanvasChar(text=char, x=x * 10, y=y).__dict__
+        for y, text in [(10, "章"), (50, "说明这一现象的原因。")]
+        for x, char in enumerate(text)
+    ]
+    store.save_page(payload)
+
+    assert [title for _, title, _ in Finalizer(store).load_page_captures(["章", "说明"])] == ["章"]
