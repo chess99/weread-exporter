@@ -47,3 +47,21 @@ def test_resume_point_uses_last_completed_page_without_guessing_from_markdown(tm
     assert resume.chapter_title == "A"
     assert resume.page_index == 7
 
+
+def test_load_manifest_recovers_progress_decorated_titles_without_losing_checkpoint(tmp_path: Path):
+    store = CheckpointStore(tmp_path, "book123")
+    decorated = "第二篇 中观 判断行业周期当前读到 30%"
+    clean = "第二篇 中观 判断行业周期"
+    manifest = Manifest.new("book123", "https://weread.qq.com/web/reader/book123", "Book", "Author", [decorated, "第8章"])
+    manifest.last_completed_chapter = decorated
+    manifest.last_completed_page = 97
+    manifest.catalog_reachability = {decorated: decorated}
+    store.save_manifest(manifest)
+
+    recovered = store.load_manifest()
+
+    assert recovered.catalog == [clean, "第8章"]
+    assert recovered.last_completed_chapter == clean
+    assert recovered.last_completed_page == 97
+    assert recovered.catalog_reachability == {clean: clean}
+

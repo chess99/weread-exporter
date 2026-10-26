@@ -39,6 +39,7 @@ def safe_filename(value: str, max_length: int = 80) -> str:
 
 def normalize_title(value: str) -> str:
     title = value.replace("+书签", "")
+    title = re.sub(r"当前读到\s*\d+(?:\.\d+)?\s*%\s*$", "", title)
     title = re.sub(r"\s+", " ", title).strip()
     return title
 

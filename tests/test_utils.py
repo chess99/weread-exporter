@@ -31,3 +31,9 @@ def test_safe_filename_keeps_chinese_and_removes_windows_invalid_chars():
 def test_normalize_title_removes_reader_ui_decorations():
     assert normalize_title("引言 工作教条+书签") == "引言 工作教条"
     assert normalize_title("  第八章   从逃避到自主  ") == "第八章 从逃避到自主"
+
+
+def test_normalize_title_removes_live_progress_without_removing_title_percentages():
+    assert normalize_title("第二篇 中观 判断行业周期当前读到 30%") == "第二篇 中观 判断行业周期"
+    assert normalize_title("第二篇 当前读到 30.5% +书签") == "第二篇"
+    assert normalize_title("第1章 收益率30%") == "第1章 收益率30%"

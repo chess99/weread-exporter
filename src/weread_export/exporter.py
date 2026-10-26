@@ -240,6 +240,8 @@ class WeReadExporter:
             await navigator.open(manifest.reader_url)
             await navigator.ensure_logged_in()
             await navigator.ensure_readable()
+            manifest.error = None
+            manifest.block_reason = None
             if manifest.last_completed_chapter:
                 await prepare_current_page_capture(navigator, manifest.last_completed_chapter)
             return await self._capture_pages(store, navigator, manifest, max_pages=max_pages)

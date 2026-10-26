@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from .utils import normalize_title
+
 
 Status = Literal["running", "complete", "blocked", "failed"]
 
@@ -65,6 +67,14 @@ class Manifest:
             "skipped_catalog": data.get("skipped_catalog", data.get("skippedCatalog", [])),
             "catalog_reachability": data.get("catalog_reachability", data.get("catalogReachability", {})),
         }
+        normalized["catalog"] = [normalize_title(title) for title in normalized["catalog"]]
+        normalized["skipped_catalog"] = [normalize_title(title) for title in normalized["skipped_catalog"]]
+        normalized["catalog_reachability"] = {
+            normalize_title(title): normalize_title(reached) if reached else reached
+            for title, reached in normalized["catalog_reachability"].items()
+        }
+        if normalized["last_completed_chapter"]:
+            normalized["last_completed_chapter"] = normalize_title(normalized["last_completed_chapter"])
         return cls(**normalized)
 
     def to_json_dict(self) -> dict[str, Any]:
